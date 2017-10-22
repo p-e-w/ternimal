@@ -13,7 +13,7 @@ use std::collections::{HashMap};
 use std::fmt::{Display};
 use std::ops::{Add, Sub, Mul};
 use std::str::{FromStr};
-use std::f64::{INFINITY};
+use std::f64::{INFINITY, NEG_INFINITY};
 use std::f64::consts::{PI};
 
 const TWO_PI: f64 = 2.0 * PI;
@@ -22,8 +22,19 @@ const TWO_PI: f64 = 2.0 * PI;
 /// Prints its formatted arguments to standard error, then exits the program.
 macro_rules! exit {
     ($($arg:tt)*) => (
-        eprintln!($($arg)*);
+        // Red foreground color
+        eprint!("\x1B[31m");
+        eprint!($($arg)*);
+        // Reset
+        eprint!("\x1B[m\n");
         process::exit(1);
+    );
+}
+
+/// Wraps its formatted arguments in an `Err`.
+macro_rules! err {
+    ($($arg:tt)*) => (
+        Err(format!($($arg)*))
     );
 }
 
@@ -135,8 +146,9 @@ fn main() {
         exit!("Invalid thickness specification: Maximum thickness is {}; must be between 0 and 1000.", max_thickness);
     }
 
+    let max_padding = 0.8 * ((min!(width, height) as f64) / 2.0);
     // Minimum distance between the path and the boundary of the arena, in blocks
-    arg_var!(padding, max_thickness, 0.0, (min!(width, height) as f64) / 2.0);
+    arg_var!(padding, min!(max_thickness, max_padding), 0.0, max_padding);
 
     let max_radius = 0.8 * (((min!(width, height) as f64) / 2.0) - padding);
     // Minimum and maximum radius of the arcs comprising the path, in blocks
@@ -808,6 +820,9 @@ impl Gradient {
             for i in 0..(length - 1) {
                 let start = steps[i].0;
                 let end = steps[i + 1].0;
+
+                assert!(start <= end);
+
                 if start <= position && position < end {
                     // Note that `start < end` per the above condition,
                     // so division by zero cannot occur here
@@ -815,6 +830,7 @@ impl Gradient {
                     return steps[i].1.interpolate(&steps[i + 1].1, balance);
                 }
             }
+
             unreachable!();
         }
     }
@@ -836,15 +852,15 @@ impl Arguments {
         for arg in args {
             let parts: Vec<&str> = arg.splitn(2, "=").collect();
             if parts.len() < 2 {
-                return Err(format!("Invalid argument '{}': Arguments must be of the form 'name=value'.", arg));
+                return err!("Invalid argument '{}': Arguments must be of the form 'name=value'.", arg);
             }
 
             let name = parts[0].trim();
             if name.is_empty() {
-                return Err(format!("Invalid argument '{}': Name must not be empty.", arg));
+                return err!("Invalid argument '{}': Name must not be empty.", arg);
             }
             if arguments.contains_key(name) {
-                return Err(format!("Duplicate argument '{}'.", name));
+                return err!("Duplicate argument '{}'.", name);
             }
 
             let value = parts[1].trim_matches(|c: char| c.is_whitespace() || c == '"' || c == '\'');
@@ -863,7 +879,7 @@ impl Arguments {
             Some(value_string) => {
                 match value_string.parse() {
                     Ok(value) => Ok(value),
-                    Err(error) => Err(format!("Invalid value '{}' for argument '{}': {}", value_string, name, error)),
+                    Err(error) => err!("Invalid value '{}' for argument '{}': {}", value_string, name, error),
                 }
             },
             None => Ok(default),
@@ -882,7 +898,7 @@ impl Arguments {
                 for part in value_string.split(",") {
                     values.push(match part.parse::<T>() {
                         Ok(value) => value,
-                        Err(error) => return Err(format!("Invalid part '{}' in argument '{}': {}", part, name, error)),
+                        Err(error) => return err!("Invalid part '{}' in argument '{}': {}", part, name, error),
                     });
                 }
 
@@ -906,7 +922,7 @@ impl <T> FromStr for Range<T> where
         if len == 1 || len == 2 {
             let from = match parts[0].parse::<T>() {
                 Ok(value) => value,
-                Err(error) => return Err(format!("Invalid range part '{}': {}", parts[0], error)),
+                Err(error) => return err!("Invalid range part '{}': {}", parts[0], error),
             };
 
             let to = if len == 1 {
@@ -914,17 +930,17 @@ impl <T> FromStr for Range<T> where
             } else {
                 match parts[1].parse::<T>() {
                     Ok(value) => value,
-                    Err(error) => return Err(format!("Invalid range part '{}': {}", parts[1], error)),
+                    Err(error) => return err!("Invalid range part '{}': {}", parts[1], error),
                 }
             };
 
             if from <= to {
                 Ok(Range::new(from, to))
             } else {
-                Err(format!("Invalid range '{}': {} is greater than {}.", s, parts[0], parts[1]))
+                err!("Invalid range '{}': {} is greater than {}.", s, parts[0], parts[1])
             }
         } else {
-            Err(format!("Invalid range '{}': There must be 1 or 2 parts; {} were supplied.", s, len))
+            err!("Invalid range '{}': There must be 1 or 2 parts; {} were supplied.", s, len)
         }
     }
 }
@@ -943,14 +959,13 @@ impl FromStr for Color {
                 if let Ok(value) = u8::from_str_radix(part, 16) {
                     rgb[i] = (value as f64) / 255.0;
                 } else {
-                    return Err(format!("Invalid color literal '{}': \
-                            Color components must be hexadecimal numbers.", s));
+                    return err!("Invalid color literal '{}': Color components must be hexadecimal numbers.", s);
                 }
             }
 
             Ok(Color::new(rgb[0], rgb[1], rgb[2]))
         } else {
-            Err(format!("Invalid color literal '{}': Colors must be of the form '#RRGGBB'.", s))
+            err!("Invalid color literal '{}': Colors must be of the form '#RRGGBB'.", s)
         }
     }
 }
@@ -962,21 +977,30 @@ impl FromStr for Gradient {
     fn from_str(s: &str) -> Result<Gradient, String> {
         let mut steps = vec![];
 
+        let mut last_position = NEG_INFINITY;
+
         for step in s.split(",") {
             let parts: Vec<&str> = step.split(":").collect();
             if parts.len() != 2 {
-                return Err(format!("Invalid gradient step '{}': Steps must be of the form '0.0:#RRGGBB'.", step));
+                return err!("Invalid gradient step '{}': Steps must be of the form '0.0:#RRGGBB'.", step);
             }
 
             let position = match parts[0].parse::<f64>() {
                 Ok(value) => value,
-                Err(_) => return Err(format!("Invalid gradient step position '{}': \
-                        Positions must be numbers between 0 and 1.", parts[0])),
+                Err(_) => return err!("Invalid gradient step position '{}': Positions must be numbers.", parts[0]),
             };
+            if !(0.0 <= position && position <= 1.0) {
+                return err!("Invalid gradient step position '{}': Positions must be between 0 and 1.", position);
+            }
+            if position < last_position {
+                return err!("Invalid gradient step position '{}': \
+                        Positions must not be less than preceding position.", position);
+            }
+            last_position = position;
 
             let color = match parts[1].parse::<Color>() {
                 Ok(value) => value,
-                Err(error) => return Err(format!("Invalid gradient step color '{}': {}", parts[1], error)),
+                Err(error) => return err!("Invalid gradient step color '{}': {}", parts[1], error),
             };
 
             steps.push((position, color));
