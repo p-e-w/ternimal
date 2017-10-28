@@ -9,7 +9,7 @@
 
 use std::{env, process, thread};
 use std::time::{Instant, Duration, SystemTime, UNIX_EPOCH};
-use std::collections::{HashMap};
+use std::collections::{VecDeque, HashMap};
 use std::fmt::{Display};
 use std::ops::{Add, Sub, Mul};
 use std::str::{FromStr};
@@ -49,6 +49,18 @@ macro_rules! min {
             $a
         } else {
             min!($($b),+)
+        }
+    );
+}
+
+/// Evaluates to the maximum of its arguments.
+macro_rules! max {
+    ($a:expr) => ($a);
+    ($a:expr, $($b:expr),+) => (
+        if $a > max!($($b),+) {
+            $a
+        } else {
+            max!($($b),+)
         }
     );
 }
@@ -176,7 +188,8 @@ fn main() {
         x_range: Range::new(padding, (width as f64) - padding),
         y_range: Range::new(padding, (height as f64) - padding),
         radius_range,
-        arcs: vec![],
+        start_position: 0.0,
+        arcs: VecDeque::new(),
     };
 
     let mut last_position = 0.0;
@@ -237,10 +250,7 @@ fn main() {
             });
         }
 
-        let model = Model {
-            lines,
-            thickness: |offset| thickness(offset, time),
-        };
+        let model = Model::new(lines, |offset| thickness(offset, time), max_thickness);
 
         let canvas = rasterize(&model, &gradient, width, height);
         let output = render(&canvas, true_color);
@@ -269,13 +279,46 @@ struct Model<F: Fn(f64) -> f64> {
     lines: Vec<Line>,
     /// Function determining the model's thickness
     thickness: F,
+    x_range: Range<f64>,
+    y_range: Range<f64>,
 }
 
 impl <F: Fn(f64) -> f64> Model<F> {
+    /// Creates a new `Model` object.
+    fn new(lines: Vec<Line>, thickness: F, max_thickness: f64) -> Model<F> {
+        assert!(!lines.is_empty());
+        assert!(max_thickness >= 0.0);
+
+        let mut min_x = INFINITY;
+        let mut max_x = NEG_INFINITY;
+        let mut min_y = INFINITY;
+        let mut max_y = NEG_INFINITY;
+
+        // Calculate bounding box of model
+        for line in &lines {
+            min_x = min!(line.a.x, line.b.x, min_x);
+            max_x = max!(line.a.x, line.b.x, max_x);
+            min_y = min!(line.a.y, line.b.y, min_y);
+            max_y = max!(line.a.y, line.b.y, max_y);
+        }
+
+        Model {
+            lines,
+            thickness,
+            x_range: Range::new(min_x - max_thickness, max_x + max_thickness),
+            y_range: Range::new(min_y - max_thickness, max_y + max_thickness),
+        }
+    }
+
     /// Returns the color of the given point if it lies within the model,
     /// or `None` if it lies outside of it.
     fn color(&self, point: &Point, gradient: &Gradient) -> Option<Color> {
-        assert!(!self.lines.is_empty());
+        // Return early if `point` lies outside the bounding box.
+        // This dramatically improves performance when the model
+        // is small compared to the arena.
+        if !(self.x_range.contains(point.x) && self.y_range.contains(point.y)) {
+            return None;
+        }
 
         let mut distance = INFINITY;
         let mut offset = 0.0;
@@ -422,15 +465,26 @@ struct Path {
     y_range: Range<f64>,
     /// Permitted range for radii of arcs comprising the path
     radius_range: Range<f64>,
-    arcs: Vec<Arc>,
+    /// Linear position associated with first arc in the path
+    start_position: f64,
+    arcs: VecDeque<Arc>,
 }
 
 impl Path {
     /// Extends the path with randomly generated arcs as needed to cover
-    /// the range of positions between `start_position` and `end_position`.
+    /// the range of positions between `start_position` and `end_position`,
+    /// and discards existing arcs not overlapping that range.
     fn generate(&mut self, start_position: f64, end_position: f64) {
-        // TODO: Delete arcs preceding `start_position` from path
-        while self.length() < end_position {
+        assert!(start_position <= end_position);
+
+        // Always leave at least one arc in the path
+        // for newly generated arcs to connect to
+        while self.arcs.len() > 1 && (self.start_position + self.arcs[0].length()) < start_position {
+            let first_arc = self.arcs.pop_front().unwrap();
+            self.start_position += first_arc.length();
+        }
+
+        while self.end_position() < end_position {
             let (center, radius, start, clockwise) = if self.arcs.is_empty() {
                 // Initial arc
                 let min_radius = self.radius_range.from;
@@ -496,35 +550,32 @@ impl Path {
                 }
             };
 
-            self.arcs.push(Arc { center, radius, start, end, clockwise });
+            self.arcs.push_back(Arc { center, radius, start, end, clockwise });
         }
     }
 
     /// Returns the point at the given linear position on the path.
     fn point(&self, position: f64) -> Point {
+        assert!(position >= self.start_position);
         assert!(!self.arcs.is_empty());
 
-        if position <= 0.0 {
-            return self.arcs[0].point(0.0);
-        } else {
-            let mut length = 0.0;
-            for arc in &self.arcs {
-                let arc_length = arc.length();
-                if position - length < arc_length {
-                    // Position lies within arc.
-                    // Note that `0 < arc_length` per the above condition,
-                    // so division by zero cannot occur here.
-                    return arc.point((position - length) / arc_length);
-                }
-                length += arc_length;
+        let mut arc_position = self.start_position;
+
+        for arc in &self.arcs {
+            let arc_length = arc.length();
+            if arc_length > 0.0 && position - arc_position <= arc_length {
+                // Position lies within arc
+                return arc.point((position - arc_position) / arc_length);
             }
-            return self.arcs[self.arcs.len() - 1].point(1.0);
+            arc_position += arc_length;
         }
+
+        unreachable!();
     }
 
-    /// Returns the total length of the path.
-    fn length(&self) -> f64 {
-        self.arcs.iter().map(|arc| arc.length()).sum()
+    /// Returns the last position in the path.
+    fn end_position(&self) -> f64 {
+        self.start_position + self.arcs.iter().map(|arc| arc.length()).sum::<f64>()
     }
 
     /// Returns the maximum radius allowed for an arc that is tangential to
@@ -683,6 +734,8 @@ impl Arc {
     /// Returns the point at the given normalized (between `0` and `1`)
     /// linear position on the arc.
     fn point(&self, position: f64) -> Point {
+        assert!(0.0 <= position && position <= 1.0);
+
         let angle = self.start + (self.difference() * position);
 
         Point::new(
@@ -771,6 +824,8 @@ impl Color {
     /// Returns the component-wise weighted linear interpolation between
     /// this color (`balance = 0`) and the given color (`balance = 1`).
     fn interpolate(&self, color: &Color, balance: f64) -> Color {
+        assert!(0.0 <= balance && balance <= 1.0);
+
         let inverse_balance = 1.0 - balance;
 
         Color::new(
@@ -806,16 +861,16 @@ struct Gradient(Vec<(f64, Color)>);
 impl Gradient {
     /// Returns the interpolated color at the given position in the gradient.
     fn color(&self, position: f64) -> Color {
+        assert!(0.0 <= position && position <= 1.0);
+
         let steps = &self.0;
-
         assert!(!steps.is_empty());
-
         let length = steps.len();
 
         if position <= steps[0].0 {
-            return steps[0].1;
+            steps[0].1
         } else if position >= steps[length - 1].0 {
-            return steps[length - 1].1;
+            steps[length - 1].1
         } else {
             for i in 0..(length - 1) {
                 let start = steps[i].0;
@@ -1057,6 +1112,11 @@ impl <T: PartialOrd> Range<T> {
     fn new(from: T, to: T) -> Range<T> {
         assert!(from <= to);
         Range { from, to }
+    }
+
+    /// Returns `true` if `value` lies within the range and `false` otherwise.
+    fn contains(&self, value: T) -> bool {
+        self.from <= value && value <= self.to
     }
 }
 

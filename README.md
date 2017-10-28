@@ -6,12 +6,12 @@ Ter**n**i**m**al (note the spelling) is a program that draws an animated lifefor
 
 From a practical perspective, the program is not very useful. It does, however, contain quite a bit of cool technology and math:
 
-* "Glow" renderer capable of 300+ frames per second (if the terminal can handle it)
+* "Glow" renderer capable of 1000+ frames per second (if the terminal can handle it)
 * Dynamic generation of an everywhere differentiable movement path composed of circular arcs
 * Skeletal deformation along the path
 * [Fourier](https://en.wikipedia.org/wiki/Fourier_series)-based shape description allowing for many body forms to be realized and animated
 
-Ternimal is also an exercise in minimalism and restraint. Written in just 1000 lines of Rust, it has *no dependencies* and consumes very few resources: 400 kB on disk, 3 MB of RAM and 5 % of a single CPU core with the default parameters. It implements its own linear algebra operations from scratch, as well as basic command line parsing and a simple random number generator.
+Ternimal is also an exercise in minimalism and restraint. Written in just 1000 lines of Rust, it has *no dependencies* and consumes very few resources: 400 kB on disk, 3 MB of RAM and 3 % of a single CPU core with the default parameters. It implements its own linear algebra operations from scratch, as well as basic command line parsing and a simple random number generator.
 
 
 ## Building
