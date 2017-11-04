@@ -139,6 +139,7 @@ fn main() {
     }
 
     let thickness = |offset: f64, time: f64| {
+        assert!(0.0 <= offset && offset <= 1.0);
         let mut thickness = coefficients[0];
         for i in 0..((coefficients.len() - 1) / 3) {
             thickness += coefficients[3 * i + 1] * (
@@ -244,10 +245,10 @@ fn main() {
 
         let mut lines = vec![];
         for i in 0..segments {
-            lines.push(Line {
-                a: path.point(path_range.from + (((segments - i) as f64) * segment_length)),
-                b: path.point(path_range.from + (((segments - (i + 1)) as f64) * segment_length)),
-            });
+            lines.push(Line::new(
+                path.point(path_range.from + (((segments - i) as f64) * segment_length)),
+                path.point(path_range.from + (((segments - (i + 1)) as f64) * segment_length)),
+            ));
         }
 
         let model = Model::new(lines, |offset| thickness(offset, time), max_thickness);
@@ -279,6 +280,7 @@ struct Model<F: Fn(f64) -> f64> {
     lines: Vec<Line>,
     /// Function determining the model's thickness
     thickness: F,
+    length: f64,
     x_range: Range<f64>,
     y_range: Range<f64>,
 }
@@ -289,13 +291,15 @@ impl <F: Fn(f64) -> f64> Model<F> {
         assert!(!lines.is_empty());
         assert!(max_thickness >= 0.0);
 
+        let mut length = 0.0;
         let mut min_x = INFINITY;
         let mut max_x = NEG_INFINITY;
         let mut min_y = INFINITY;
         let mut max_y = NEG_INFINITY;
 
-        // Calculate bounding box of model
+        // Calculate length and bounding box of model
         for line in &lines {
+            length += line.length;
             min_x = min!(line.a.x, line.b.x, min_x);
             max_x = max!(line.a.x, line.b.x, max_x);
             min_y = min!(line.a.y, line.b.y, min_y);
@@ -305,6 +309,7 @@ impl <F: Fn(f64) -> f64> Model<F> {
         Model {
             lines,
             thickness,
+            length,
             x_range: Range::new(min_x - max_thickness, max_x + max_thickness),
             y_range: Range::new(min_y - max_thickness, max_y + max_thickness),
         }
@@ -321,35 +326,32 @@ impl <F: Fn(f64) -> f64> Model<F> {
         }
 
         let mut distance = INFINITY;
-        let mut offset = 0.0;
         let mut length = 0.0;
 
-        // Determine minimum distance and corresponding offset
+        // Determine minimum *relative* distance from point to model
+        // (distance as a fraction of the corresponding local thickness)
         for line in &self.lines {
             let (line_distance, line_offset) = line.distance_and_offset(point);
-            let line_length = line.length();
 
-            if line_distance < distance {
-                distance = line_distance;
-                offset = length + (line_length * line_offset);
+            let offset = if self.length > 0.0 {
+                (length + (line.length * line_offset)) / self.length
+            } else {
+                0.0
+            };
+
+            let thickness = (self.thickness)(offset);
+
+            if thickness > 0.0 {
+                distance = min!(line_distance / thickness, distance);
             }
 
-            length += line_length;
+            length += line.length;
         }
 
-        if length > 0.0 {
-            offset /= length;
-        }
-
-        let thickness = (self.thickness)(offset);
-
-        // TODO: Handle case where thickness at offset is less than distance,
-        //       but the point lies within the local thickness of another line
-        //       that is further away from it than the closest line.
-        if distance > thickness {
+        if distance > 1.0 {
             None
         } else {
-            Some(gradient.color(distance / thickness))
+            Some(gradient.color(distance))
         }
     }
 }
@@ -678,12 +680,13 @@ impl Mul<f64> for Point {
 struct Line {
     a: Point,
     b: Point,
+    length: f64,
 }
 
 impl Line {
-    /// Returns the length of the line segment.
-    fn length(&self) -> f64 {
-        self.a.distance(&self.b)
+    /// Creates a new `Line` object.
+    fn new(a: Point, b: Point) -> Line {
+        Line { a, b, length: a.distance(&b) }
     }
 
     /// Returns the distance from the given point to the line segment,
@@ -695,13 +698,10 @@ impl Line {
         let a = self.a;
         let b = self.b;
 
-        // `|ab|`
-        let length = self.length();
-
-        let offset = if length > 0.0 {
+        let offset = if self.length > 0.0 {
             // `(ab . ap) / |ab|` is the scalar projection of `ap` onto `ab`,
             // so `(ab . ap) / |ab|^2` is a normalized scalar with `0 = a` and `1 = b`
-            let t = (b - a).dot(&(*point - a)) / length.powi(2);
+            let t = (b - a).dot(&(*point - a)) / self.length.powi(2);
 
             // Clip to range that lies within line segment
             if t < 0.0 {
