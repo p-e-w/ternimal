@@ -76,6 +76,12 @@ Creatively combining low segment counts, wide distance fields, and appropriately
 
 ## FAQ
 
+### What platforms and terminals are supported?
+
+Ternimal has been tested on Linux, macOS, and Windows.
+
+On Linux, almost all terminal emulators render Ternimal flawlessly. On macOS, iTerm2 or Alacritty are recommended. On Windows, PowerShell and WSL appear to work well, with ConEmu also working but lacking 24-bit colors.
+
 ### Why am I seeing random/weird colors?
 
 Most likely because your terminal does not support 24-bit RGB color escape sequences. This in turn probably means that you are using macOS' default Terminal.app, which is the only major terminal emulator still missing that feature.
@@ -96,12 +102,6 @@ Ternimal works best with fonts that have a character aspect ratio as close to 2:
 The Linux console does not support Unicode fonts. It does, however, appear to recognize the Unicode *encoding*, and attempts to translate certain Unicode code points to code points in its internal encoding, which includes the block symbols required by Ternimal.
 
 There appears to be a bug in this conversion, though. The *UPPER HALF BLOCK* character is translated correctly, but the *LOWER HALF BLOCK* is not, resulting in a striped pattern.
-
-### Does Ternimal work on Windows?
-
-No idea.
-
-I'd love to know, though, so if you get it to build and run in some terminal emulator, I would appreciate if you could file an issue with a brief description and if possible some screenshots/screencasts.
 
 ### How does it look in [cool-retro-term](https://github.com/Swordfish90/cool-retro-term)?
 
