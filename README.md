@@ -74,6 +74,22 @@ The thickness function includes a time parameter. This makes it possible to defi
 Creatively combining low segment counts, wide distance fields, and appropriately chosen gradients can produce output that seemingly goes beyond what is possible with spine-based rendering alone.
 
 
+## Performance
+
+Ternimal is highly optimized for performance, to the extent that in many situations, the CPU time needed to generate its output is less than that taken by the terminal emulator to display the same. Various tricks are employed to minimize computational load and output size. In GNOME Terminal, the default parameters render up to 2500 frames per second.
+
+I have tried everything under the sun to squeeze out even more performance, with mixed results. Some of the unsuccessful/semi-successful attempts include:
+
+* Using `f32` in place of `f64`. This does give a speedup of 5-10 %, but [runs into precision problems](https://blog.demofox.org/2017/11/21/floating-point-precision/) after a few days. It might be possible to "reset" the time and position values in regular intervals to avoid this, but the logic would be quite complex.
+* Pre-computing samples of the thickness function, and substituting those for the full evaluation. With some models, this idea can improve performance by up to 5 %, but it works only for time-independent thickness functions and adds a lot of ugly code.
+* Manually handling `stdout` locking and/or buffering. Although Ternimal writes a large amount of output, this optimization results only in a disappointing 1 % speedup and was therefore abandoned.
+* Reducing memory allocations, e.g. by using a (sufficiently large) fixed-capacity string when building output. This had no measurable impact at all.
+* "Optimizing" string construction. It turns out that Rust's `format!` macro is hard to beat for this purpose, and every alternative I tried was either equal or slower.
+* Playing around with compiler flags like `target-cpu=native`. This also gave no measurable improvement.
+
+[Profiling with Callgrind and OProfile](https://llogiq.github.io/2015/07/15/profiling.html) reveals that most of the CPU time is spent constructing and writing the output string and that rendering computations only play a role for very large models. Given the lack of success trying to make output handling faster, it seems reasonable to say Ternimal's performance is already quite satisfactory.
+
+
 ## FAQ
 
 ### What platforms and terminals are supported?

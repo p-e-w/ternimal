@@ -256,7 +256,8 @@ fn main() {
         let canvas = rasterize(&model, &gradient, width, height);
         let output = render(&canvas, true_color);
 
-        print!("{}", output);
+        // Hide cursor while printing canvas to avoid flickering
+        print!("\x1B[?25l{}\x1B[?25h\n", output);
 
         // Sleep to compensate for difference between rendering time and frame time
         let sleep_time = (1.0 / fps) - (seconds(start_time.elapsed()) - time);
@@ -280,6 +281,7 @@ struct Model<F: Fn(f64) -> f64> {
     lines: Vec<Line>,
     /// Function determining the model's thickness
     thickness: F,
+    max_thickness: f64,
     length: f64,
     x_range: Range<f64>,
     y_range: Range<f64>,
@@ -309,6 +311,7 @@ impl <F: Fn(f64) -> f64> Model<F> {
         Model {
             lines,
             thickness,
+            max_thickness,
             length,
             x_range: Range::new(min_x - max_thickness, max_x + max_thickness),
             y_range: Range::new(min_y - max_thickness, max_y + max_thickness),
@@ -333,16 +336,18 @@ impl <F: Fn(f64) -> f64> Model<F> {
         for line in &self.lines {
             let (line_distance, line_offset) = line.distance_and_offset(point);
 
-            let offset = if self.length > 0.0 {
-                (length + (line.length * line_offset)) / self.length
-            } else {
-                0.0
-            };
+            if line_distance <= self.max_thickness {
+                let offset = if self.length > 0.0 {
+                    (length + (line.length * line_offset)) / self.length
+                } else {
+                    0.0
+                };
 
-            let thickness = (self.thickness)(offset);
+                let thickness = (self.thickness)(offset);
 
-            if thickness > 0.0 {
-                distance = min!(line_distance / thickness, distance);
+                if thickness > 0.0 {
+                    distance = min!(line_distance / thickness, distance);
+                }
             }
 
             length += line.length;
@@ -444,9 +449,16 @@ fn render(canvas: &Canvas, true_color: bool) -> String {
             reset_required = canvas[2 * i][j].is_some() && canvas[2 * i + 1][j].is_some();
         }
 
+        let last_line = i == (canvas.len() / 2) - 1;
+
         // Always reset on the last line to restore foreground color
-        reset_required = reset_required || (i == (canvas.len() / 2) - 1);
-        output.push_str(&format!("{}\n", if reset_required { "\x1B[m" } else { "" }));
+        if reset_required || last_line {
+            output.push_str("\x1B[m");
+        }
+        if !last_line {
+            output.push_str("\n");
+        }
+
         reset_required = false;
     }
 
