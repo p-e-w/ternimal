@@ -113,12 +113,9 @@ fn main() {
     // Minimum and maximum length of the model, in blocks.
     // The program will animate between the two for a "creeping" motion.
     let length_range = unwrap_or_exit(arguments.value("length", Range::new(10.0, 20.0)));
-    if !(0.0 <= length_range.from && length_range.to <= 1000.0) {
-        exit!("Invalid length '{} to {}': Length must be between 0 and 1000.", length_range.from, length_range.to);
+    if !(1.0 <= length_range.from && length_range.to <= 1000.0) {
+        exit!("Invalid length '{} to {}': Length must be between 1 and 1000.", length_range.from, length_range.to);
     }
-
-    // Number of line segments comprising the model's spine
-    arg_var!(segments, 10, 1, 1000);
 
     // Coefficients of the function determining the model's thickness,
     // in blocks.
@@ -126,25 +123,28 @@ fn main() {
     // The function has the form
     //
     // ```
-    // f(o, t) = a + b * sin(c * PI * o + d * t) + ...
+    // f(o, t) = a + b * sin(PI * (c * o + d * t + e)) + ...
     // ```
     //
     // where `o` is the offset (between `0` and `1`) from the head
     // of the model to its tail, and `t` is the time in seconds
     // since the program was started.
-    let coefficients = unwrap_or_exit(arguments.values("thickness", vec![4.0, 1.0, 3.5, 0.0]));
-    if coefficients.len() % 3 != 1 {
-        exit!("Invalid thickness specification: There must be 1, or 4, or 7, ... coefficients; {} were supplied.",
+    let coefficients = unwrap_or_exit(arguments.values("thickness", vec![4.0, 1.0, 3.5, 0.0, 0.0]));
+    if coefficients.len() % 4 != 1 {
+        exit!("Invalid thickness specification: There must be 1, or 5, or 9, ... coefficients; {} were supplied.",
                 coefficients.len());
     }
 
     let thickness = |offset: f64, time: f64| {
         assert!(0.0 <= offset && offset <= 1.0);
         let mut thickness = coefficients[0];
-        for i in 0..((coefficients.len() - 1) / 3) {
-            thickness += coefficients[3 * i + 1] * (
-                (coefficients[3 * i + 2] * PI * offset) +
-                (coefficients[3 * i + 3] * time)
+        for i in 0..((coefficients.len() - 1) / 4) {
+            thickness += coefficients[4 * i + 1] * (
+                PI * (
+                    (coefficients[4 * i + 2] * offset) +
+                    (coefficients[4 * i + 3] * time) +
+                    coefficients[4 * i + 4]
+                )
             ).sin();
         }
         thickness
@@ -152,11 +152,11 @@ fn main() {
 
     // Calculate upper bound for value of thickness function
     let mut max_thickness = coefficients[0];
-    for i in 0..((coefficients.len() - 1) / 3) {
-        max_thickness += coefficients[3 * i + 1].abs();
+    for i in 0..((coefficients.len() - 1) / 4) {
+        max_thickness += coefficients[4 * i + 1].abs();
     }
-    if !(0.0 <= max_thickness && max_thickness <= 1000.0) {
-        exit!("Invalid thickness specification: Maximum thickness is {}; must be between 0 and 1000.", max_thickness);
+    if !(0.5 <= max_thickness && max_thickness <= 1000.0) {
+        exit!("Invalid thickness specification: Maximum thickness is {}; must be between 0.5 and 1000.", max_thickness);
     }
 
     let max_padding = 0.8 * ((min!(width, height) as f64) / 2.0);
@@ -167,9 +167,9 @@ fn main() {
     // Minimum and maximum radius of the arcs comprising the path, in blocks
     let radius_range = unwrap_or_exit(arguments.value("radius",
             Range::new(min!(1.2 * max_thickness, max_radius), max_radius)));
-    if !(0.0 <= radius_range.from && radius_range.to <= max_radius) {
+    if !(0.5 <= radius_range.from && radius_range.to <= max_radius) {
         exit!("Invalid radius '{} to {}': For the configured width, height, and padding, \
-                radius must be between 0 and {}.", radius_range.from, radius_range.to, max_radius);
+                radius must be between 0.5 and {}.", radius_range.from, radius_range.to, max_radius);
     }
 
     // The dimensions of the arena must be such that it is always possible
@@ -239,19 +239,11 @@ fn main() {
             path_range.to = path_range.from + length_range.from;
         }
 
-        path.generate(path_range.from, path_range.to);
-
-        let segment_length = (path_range.to - path_range.from) / (segments as f64);
-
-        let mut lines = vec![];
-        for i in 0..segments {
-            lines.push(Line::new(
-                path.point(path_range.from + (((segments - i) as f64) * segment_length)),
-                path.point(path_range.from + (((segments - (i + 1)) as f64) * segment_length)),
-            ));
-        }
-
-        let model = Model::new(lines, |offset| thickness(offset, time), max_thickness);
+        let model = Model::new(
+            path.generate(path_range.from, path_range.to),
+            |offset| thickness(offset, time),
+            max_thickness,
+        );
 
         let canvas = rasterize(&model, &gradient, width, height);
         let output = render(&canvas, true_color);
@@ -278,7 +270,7 @@ fn main() {
 /// 2D model of a lifeform
 struct Model<F: Fn(f64) -> f64> {
     /// "Spine" of the model
-    lines: Vec<Line>,
+    arcs: Vec<Arc>,
     /// Function determining the model's thickness
     thickness: F,
     max_thickness: f64,
@@ -289,27 +281,32 @@ struct Model<F: Fn(f64) -> f64> {
 
 impl <F: Fn(f64) -> f64> Model<F> {
     /// Creates a new `Model` object.
-    fn new(lines: Vec<Line>, thickness: F, max_thickness: f64) -> Model<F> {
-        assert!(!lines.is_empty());
-        assert!(max_thickness >= 0.0);
+    fn new(arcs: Vec<Arc>, thickness: F, max_thickness: f64) -> Model<F> {
+        assert!(!arcs.is_empty());
+        assert!(max_thickness > 0.0);
 
         let mut length = 0.0;
+
         let mut min_x = INFINITY;
         let mut max_x = NEG_INFINITY;
         let mut min_y = INFINITY;
         let mut max_y = NEG_INFINITY;
 
         // Calculate length and bounding box of model
-        for line in &lines {
-            length += line.length;
-            min_x = min!(line.a.x, line.b.x, min_x);
-            max_x = max!(line.a.x, line.b.x, max_x);
-            min_y = min!(line.a.y, line.b.y, min_y);
-            max_y = max!(line.a.y, line.b.y, max_y);
+        for arc in &arcs {
+            length += arc.length;
+
+            let (x_range, y_range) = arc.bounding_box();
+            min_x = min!(x_range.from, min_x);
+            max_x = max!(x_range.to, max_x);
+            min_y = min!(y_range.from, min_y);
+            max_y = max!(y_range.to, max_y);
         }
 
+        assert!(length > 0.0);
+
         Model {
-            lines,
+            arcs,
             thickness,
             max_thickness,
             length,
@@ -333,24 +330,31 @@ impl <F: Fn(f64) -> f64> Model<F> {
 
         // Determine minimum *relative* distance from point to model
         // (distance as a fraction of the corresponding local thickness)
-        for line in &self.lines {
-            let (line_distance, line_offset) = line.distance_and_offset(point);
+        for (i, arc) in self.arcs.iter().enumerate() {
+            let first_arc = i == 0;
+            let last_arc = i == self.arcs.len() - 1;
 
-            if line_distance <= self.max_thickness {
-                let offset = if self.length > 0.0 {
-                    (length + (line.length * line_offset)) / self.length
-                } else {
-                    0.0
-                };
+            let (arc_distance, arc_offset) = match arc.location(point) {
+                ArcLocation::Inside(offset) => (point.distance(&arc.point(offset)), offset),
+                // "Round off" model shape by capping ends with circles
+                ArcLocation::Before if first_arc => (point.distance(&arc.point(0.0)), 0.0),
+                ArcLocation::After if last_arc => (point.distance(&arc.point(1.0)), 1.0),
+                _ => (-1.0, -1.0),
+            };
 
-                let thickness = (self.thickness)(offset);
+            if 0.0 <= arc_distance && arc_distance <= self.max_thickness {
+                let offset = (length + (arc.length * arc_offset)) / self.length;
+
+                // The loop iterates over arcs from the tail of the model to its head,
+                // so the offset must be inverted before being passed to the thickness function
+                let thickness = (self.thickness)(1.0 - offset);
 
                 if thickness > 0.0 {
-                    distance = min!(line_distance / thickness, distance);
+                    distance = min!(arc_distance / thickness, distance);
                 }
             }
 
-            length += line.length;
+            length += arc.length;
         }
 
         if distance > 1.0 {
@@ -487,15 +491,16 @@ struct Path {
 impl Path {
     /// Extends the path with randomly generated arcs as needed to cover
     /// the range of positions between `start_position` and `end_position`,
-    /// and discards existing arcs not overlapping that range.
-    fn generate(&mut self, start_position: f64, end_position: f64) {
-        assert!(start_position <= end_position);
+    /// discards existing arcs not overlapping that range, and returns
+    /// the segment of the path corresponding to the range.
+    fn generate(&mut self, start_position: f64, end_position: f64) -> Vec<Arc> {
+        assert!(start_position < end_position);
 
         // Always leave at least one arc in the path
         // for newly generated arcs to connect to
-        while self.arcs.len() > 1 && (self.start_position + self.arcs[0].length()) < start_position {
+        while self.arcs.len() > 1 && (self.start_position + self.arcs[0].length) < start_position {
             let first_arc = self.arcs.pop_front().unwrap();
-            self.start_position += first_arc.length();
+            self.start_position += first_arc.length;
         }
 
         while self.end_position() < end_position {
@@ -521,7 +526,7 @@ impl Path {
                 (
                     center,
                     self.random.real_range(min_radius, max_radius),
-                    self.random.real_range(0.0, TWO_PI),
+                    self.random.real_range_except(0.0, TWO_PI, &[TWO_PI]),
                     self.random.flip(),
                 )
             } else {
@@ -553,43 +558,55 @@ impl Path {
             // Brute force an admissible endpoint angle for the arc, that is,
             // an angle that allows for the construction of a tangent arc with
             // radius at least the minimum radius specified for the path
-            let end = loop {
-                let angle = self.random.real_range(0.0, TWO_PI);
-                let arc = Arc { center, radius, start: 0.0, end: angle, clockwise: true };
+            let arc = loop {
+                let end = self.random.real_range_except(0.0, TWO_PI, &[TWO_PI, start]);
+                let arc = Arc::new(center, radius, start, end, clockwise);
 
                 let (endpoint, direction) = arc.endpoint_and_direction();
 
                 if self.max_radius(endpoint, direction) >= self.radius_range.from {
-                    break angle;
+                    break arc;
                 }
             };
 
-            self.arcs.push_back(Arc { center, radius, start, end, clockwise });
+            self.arcs.push_back(arc);
         }
-    }
 
-    /// Returns the point at the given linear position on the path.
-    fn point(&self, position: f64) -> Point {
-        assert!(position >= self.start_position);
-        assert!(!self.arcs.is_empty());
+        let mut arcs = vec![];
 
-        let mut arc_position = self.start_position;
+        let mut arc_start_position = self.start_position;
 
         for arc in &self.arcs {
-            let arc_length = arc.length();
-            if arc_length > 0.0 && position - arc_position <= arc_length {
-                // Position lies within arc
-                return arc.point((position - arc_position) / arc_length);
+            let arc_end_position = arc_start_position + arc.length;
+
+            if start_position < arc_end_position && end_position > arc_start_position {
+                // Arc is at least partially contained in range
+                let start = if start_position > arc_start_position {
+                    let position = (start_position - arc_start_position) / arc.length;
+                    ((arc.start + (arc.end_difference * position)) + TWO_PI) % TWO_PI
+                } else {
+                    arc.start
+                };
+
+                let end = if end_position < arc_end_position {
+                    let position = (end_position - arc_start_position) / arc.length;
+                    ((arc.start + (arc.end_difference * position)) + TWO_PI) % TWO_PI
+                } else {
+                    arc.end
+                };
+
+                arcs.push(Arc::new(arc.center, arc.radius, start, end, arc.clockwise));
             }
-            arc_position += arc_length;
+
+            arc_start_position = arc_end_position;
         }
 
-        unreachable!();
+        arcs
     }
 
     /// Returns the last position in the path.
     fn end_position(&self) -> f64 {
-        self.start_position + self.arcs.iter().map(|arc| arc.length()).sum::<f64>()
+        self.start_position + self.arcs.iter().map(|arc| arc.length).sum::<f64>()
     }
 
     /// Returns the maximum radius allowed for an arc that is tangential to
@@ -654,11 +671,6 @@ impl Point {
     fn distance(&self, point: &Point) -> f64 {
         ((self.x - point.x).powi(2) + (self.y - point.y).powi(2)).sqrt()
     }
-
-    /// Returns the dot product of this point/vector and the given point/vector.
-    fn dot(&self, point: &Point) -> f64 {
-        (self.x * point.x) + (self.y * point.y)
-    }
 }
 
 /// Vector addition
@@ -688,49 +700,6 @@ impl Mul<f64> for Point {
     }
 }
 
-/// Line segment in `R^2`
-struct Line {
-    a: Point,
-    b: Point,
-    length: f64,
-}
-
-impl Line {
-    /// Creates a new `Line` object.
-    fn new(a: Point, b: Point) -> Line {
-        Line { a, b, length: a.distance(&b) }
-    }
-
-    /// Returns the distance from the given point to the line segment,
-    /// as well as the position of the point's projection onto the segment,
-    /// as a number between `0` (`a`) and `1` (`b`).
-    fn distance_and_offset(&self, point: &Point) -> (f64, f64) {
-        // For an extensive discussion of this problem,
-        // see https://stackoverflow.com/q/849211
-        let a = self.a;
-        let b = self.b;
-
-        let offset = if self.length > 0.0 {
-            // `(ab . ap) / |ab|` is the scalar projection of `ap` onto `ab`,
-            // so `(ab . ap) / |ab|^2` is a normalized scalar with `0 = a` and `1 = b`
-            let t = (b - a).dot(&(*point - a)) / self.length.powi(2);
-
-            // Clip to range that lies within line segment
-            if t < 0.0 {
-                0.0
-            } else if t > 1.0 {
-                1.0
-            } else {
-                t
-            }
-        } else {
-            0.0
-        };
-
-        (point.distance(&(a + ((b - a) * offset))), offset)
-    }
-}
-
 /// Circular arc in `R^2`
 struct Arc {
     center: Point,
@@ -740,15 +709,41 @@ struct Arc {
     /// End angle of the arc (between `0` and `TWO_PI`)
     end: f64,
     clockwise: bool,
+    length: f64,
+    end_difference: f64,
 }
 
 impl Arc {
+    /// Creates a new `Arc` object.
+    fn new(center: Point, radius: f64, start: f64, end: f64, clockwise: bool) -> Arc {
+        // Note that these assertions guarantee that the arc has positive length
+        assert!(radius > 0.0);
+        assert!(0.0 <= start && start < TWO_PI);
+        assert!(0.0 <= end && end < TWO_PI);
+        assert!(start != end);
+
+        let mut arc = Arc {
+            center,
+            radius,
+            start,
+            end,
+            clockwise,
+            length: 0.0,
+            end_difference: 0.0,
+        };
+
+        arc.end_difference = arc.difference(arc.end);
+        arc.length = arc.end_difference.abs() * arc.radius;
+
+        arc
+    }
+
     /// Returns the point at the given normalized (between `0` and `1`)
     /// linear position on the arc.
     fn point(&self, position: f64) -> Point {
         assert!(0.0 <= position && position <= 1.0);
 
-        let angle = self.start + (self.difference() * position);
+        let angle = self.start + (self.end_difference * position);
 
         Point::new(
             self.center.x + (angle.cos() * self.radius),
@@ -758,15 +753,10 @@ impl Arc {
         )
     }
 
-    /// Returns the length of the arc.
-    fn length(&self) -> f64 {
-        self.difference().abs() * self.radius
-    }
-
-    /// Returns the signed angular difference between `start` and `end`,
+    /// Returns the signed angular difference between `start` and the given angle,
     /// taking `clockwise` into account.
-    fn difference(&self) -> f64 {
-        let difference = self.end - self.start;
+    fn difference(&self, angle: f64) -> f64 {
+        let difference = angle - self.start;
 
         if difference > 0.0 && self.clockwise {
             difference - TWO_PI
@@ -787,6 +777,74 @@ impl Arc {
 
         (endpoint, direction)
     }
+
+    /// Returns the horizontal and vertical extent of the arc.
+    fn bounding_box(&self) -> (Range<f64>, Range<f64>) {
+        let start_point = self.point(0.0);
+        let end_point = self.point(1.0);
+
+        let min_x = if self.contains_angle(PI) {
+            self.center.x - self.radius
+        } else {
+            min!(start_point.x, end_point.x)
+        };
+
+        let max_x = if self.contains_angle(0.0) {
+            self.center.x + self.radius
+        } else {
+            max!(start_point.x, end_point.x)
+        };
+
+        let min_y = if self.contains_angle(PI / 2.0) {
+            self.center.y - self.radius
+        } else {
+            min!(start_point.y, end_point.y)
+        };
+
+        let max_y = if self.contains_angle(1.5 * PI) {
+            self.center.y + self.radius
+        } else {
+            max!(start_point.y, end_point.y)
+        };
+
+        (Range::new(min_x, max_x), Range::new(min_y, max_y))
+    }
+
+    /// Returns `true` if the arc covers the given angle and `false` otherwise.
+    fn contains_angle(&self, angle: f64) -> bool {
+        self.difference(angle).abs() <= self.end_difference.abs()
+    }
+
+    /// Returns the location of the given point relative to the arc.
+    fn location(&self, point: &Point) -> ArcLocation {
+        let direction = *point - self.center;
+
+        let angle = ((-direction.y).atan2(direction.x) + TWO_PI) % TWO_PI;
+
+        let angle_difference = self.difference(angle).abs();
+        let end_difference = self.end_difference.abs();
+
+        if angle_difference <= end_difference {
+            ArcLocation::Inside(angle_difference / end_difference)
+        } else if (angle_difference - end_difference) > (TWO_PI - end_difference) / 2.0 {
+            ArcLocation::Before
+        } else {
+            ArcLocation::After
+        }
+    }
+}
+
+/// Location of a `Point` relative to an `Arc`
+enum ArcLocation {
+    /// The point lies inside the circular sector traced out by the arc
+    /// (extended to an infinite radius), at the given position (between `0` and `1`)
+    Inside(f64),
+    /// The point lies inside the inverse of the circular sector traced out by the arc,
+    /// within the half that touches the start of the arc
+    Before,
+    /// The point lies inside the inverse of the circular sector traced out by the arc,
+    /// within the half that touches the end of the arc
+    After,
 }
 
 
@@ -1105,6 +1163,17 @@ impl Random {
     fn real_range(&mut self, min: f64, max: f64) -> f64 {
         assert!(min <= max);
         (self.real() * (max - min)) + min
+    }
+
+    /// Returns a pseudorandom number between `min` and `max` (inclusive),
+    /// but not equal to any number in `except`.
+    fn real_range_except(&mut self, min: f64, max: f64, except: &[f64]) -> f64 {
+        loop {
+            let number = self.real_range(min, max);
+            if !except.contains(&number) {
+                break number;
+            }
+        }
     }
 
     /// Returns `true` or `false` at random with equal probability.

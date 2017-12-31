@@ -29,14 +29,14 @@ rustc -O ternimal.rs
 
 ## Usage
 
-Fundamentally, Ternimal does nothing more than color the distance field from a segmented spine moving along a meandering path. There are [many parameters](ternimal.rs#L88-L173) controlling this process, however, nearly all of which can be manipulated through the command line.
+Fundamentally, Ternimal does nothing more than color the distance field from a segment of a meandering path. There are [many parameters](ternimal.rs#L88-L173) controlling this process, however, nearly all of which can be manipulated through the command line.
 
 This makes the system very flexible. The following are just a few examples of what is possible:
 
 ### "Anaconda"
 
 ```
-./ternimal length=100 segments=50 thickness=1,4,1,0 radius=6,12 gradient=0:#666600,0.5:#00ff00,1:#003300
+./ternimal length=100 thickness=1,4,1,0,0 radius=6,12 gradient=0:#666600,0.5:#00ff00,1:#003300
 ```
 
 ![](https://user-images.githubusercontent.com/2702526/32404762-e5643794-c14e-11e7-81b2-bfa37809b128.gif)
@@ -46,7 +46,7 @@ Sine waves can be used to generate quite organic-looking shapes. In this case, a
 ### "Swarm"
 
 ```
-./ternimal length=200 segments=50 thickness=0,4,19,0
+./ternimal length=200 thickness=0,4,19,0,0
 ```
 
 ![](https://user-images.githubusercontent.com/2702526/32404773-0e0a154c-c14f-11e7-8344-64e1d0e22617.gif)
@@ -56,22 +56,12 @@ Ternimal only renders a single model. However, thickness variations can give the
 ### "Rainbow"
 
 ```
-./ternimal length=20 thickness=70,15,0,5 padding=10 radius=5 gradient=0.03:#ffff00,0.15:#0000ff,0.3:#ff0000,0.5:#00ff00
+./ternimal length=20 thickness=70,15,0,1,0 padding=10 radius=5 gradient=0.03:#ffff00,0.15:#0000ff,0.3:#ff0000,0.5:#00ff00
 ```
 
 ![](https://user-images.githubusercontent.com/2702526/32404777-339d841a-c14f-11e7-97ee-b5f7a5ea87e3.gif)
 
 The thickness function includes a time parameter. This makes it possible to define shape animations. Arbitrarily many Fourier series terms can be specified, enabling very complex animations.
-
-### "Black Hole"
-
-```
-./ternimal speed=10 length=100 segments=5 thickness=13 gradient=0.5:#000000,0.8:#ffffff,1:#000000
-```
-
-![](https://user-images.githubusercontent.com/2702526/32404779-59c94552-c14f-11e7-8eea-d1786ff29e31.gif)
-
-Creatively combining low segment counts, wide distance fields, and appropriately chosen gradients can produce output that seemingly goes beyond what is possible with spine-based rendering alone.
 
 
 ## Performance
